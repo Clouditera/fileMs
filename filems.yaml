@@ -1,0 +1,19 @@
+Env: dev # 环境，线上环境：prod、测试环境：dev
+Port: 38080 # http端口
+GrpcPort: 38083 # grpc
+LogFile: /var/log/filems.log # 日志文件
+LogLevel: 3 # 日志级别 TraceLevel = 6, DebugLevel = 5, InfoLevel = 4, WarnLevel = 3, ErrorLevel = 2, FatalLevel = 1, PanicLevel = 0
+ShowSql: false
+Minio:
+  Url: 192.168.31.18:9000
+  AccessKeyID: minio
+  SecretAccessKey: minio123
+  UseSSL: false
+  Bucket: sourcefuzz-bucket
+  BasePath: breakpoint
+  Location: cn-north-1
+DB:
+  Url: zhurong:123456@tcp(192.168.31.18:3306)/zhurong_db?charset=utf8mb4&parseTime=True&loc=Local
+  MaxIdleConns: 50
+  MaxOpenConns: 200
+  MaxLifetimeConn: 1  # 连接时长 hour

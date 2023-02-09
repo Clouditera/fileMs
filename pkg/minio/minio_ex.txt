@@ -1,0 +1,52 @@
+package minio
+
+import (
+	"context"
+	"fileMS/pkg/config"
+	"github.com/minio/minio-go/v6"
+	"github.com/minio/minio-go/v6/pkg/credentials"
+	"github.com/sirupsen/logrus"
+)
+
+type Minio struct {
+	Client *minio.Client
+}
+
+var ClientMinio *Minio
+
+func InitMinio(conf *config.Config) error {
+	ctx := context.Background()
+	// Initialize minio client object.
+	minioClient, err := minio.New(conf.Minio.Url, &minio.Options{
+		Creds:  credentials.NewStaticV4(conf.Minio.AccessKeyID, conf.Minio.SecretAccessKey, ""),
+		Secure: conf.Minio.UseSSL,
+	})
+	if err != nil {
+		logrus.Errorf("Minio初始化失败：%s", err)
+		ClientMinio = &Minio{
+			Client: nil,
+		}
+		return err
+	} else {
+		ClientMinio = &Minio{
+			Client: minioClient,
+		}
+	}
+
+	err = minioClient.MakeBucket(ctx, conf.Minio.Bucket, minio.MakeBucketOptions{}) //Region: location
+	if err != nil {
+		// Check to see if we already own this bucket (which happens if you run this twice)
+		exists, errBucketExists := minioClient.BucketExists(ctx, conf.Minio.Bucket)
+		if errBucketExists == nil && exists {
+			logrus.Infof("存储桶 %s 已经存在", conf.Minio.Bucket)
+		} else {
+			logrus.Errorf("查询存储桶状态异常: %v", errBucketExists)
+			return errBucketExists
+		}
+	} else {
+		logrus.Infof("创建存储桶 %s 成功", conf.Minio.Bucket)
+	}
+
+	logrus.Infof("sucess to connect minio %s", conf.Minio.Url)
+	return nil
+}

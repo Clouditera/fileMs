@@ -1,0 +1,32 @@
+syntax = "proto3"; // 使用proto3语法
+
+option go_package = "github.com/Clouditera/fileMs/proto"; // 设置go包路径
+
+package proto; // 设置包名
+
+// fileMs service define.
+service FileMsService {
+  // get file
+  rpc GetFile(FileRequest) returns (FileResponse) {}
+  // delete file
+  rpc DelFile(FileRequest) returns (FileResponse) {}
+  // list file versions
+  rpc ListFileVersions(FileRequest) returns (FileVersionResponse) {}
+}
+
+
+message FileRequest {
+  string uuid = 1;
+}
+
+message FileResponse {
+  string uuid = 1;
+  string file = 2; //name
+  string url =3;
+}
+
+message  FileVersionResponse {
+  string uuid = 1;
+  string file = 2; //name
+  repeated string version = 3;
+}
