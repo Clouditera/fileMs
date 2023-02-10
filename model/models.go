@@ -30,4 +30,5 @@ type FileChunk struct {
 	Size           int64
 	FileName       string
 	CompletedParts string `gorm:"type:text"` // chunkNumber+etag eg: ,1-asqwewqe21312312.2-123hjkas
+	//ReadOnly       int    `gorm:"DEFAULT 1"` // read only: 1, read and write: 0
 }

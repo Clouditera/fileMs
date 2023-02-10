@@ -71,9 +71,9 @@ func (c *FileController) GetChunks() *web.JsonResult {
 
 	for {
 		// TODO 验证take
-		fileChunk := services.FileMsService.FindOne(sqls.NewCnd().Eq("md5", fileMD5).Eq("fileName", fileName))
+		fileChunk := services.FileMsService.FindOne(sqls.NewCnd().Eq("md5", fileMD5).Eq("file_name", fileName))
 		if fileChunk == nil {
-			logrus.Errorf("GetFileChunkByMD5 failed by md5: %s", fileMD5)
+			logrus.Errorf("GetFileChunkByMD5 failed by md5: %s, file name: %s", fileMD5, fileName)
 			break
 		}
 

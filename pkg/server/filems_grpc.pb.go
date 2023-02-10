@@ -22,8 +22,10 @@ const _ = grpc.SupportPackageIsVersion7
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type FileMsServiceClient interface {
-	// get file
+	// get file, return url
 	GetFile(ctx context.Context, in *FileRequest, opts ...grpc.CallOption) (*FileResponse, error)
+	// get file content
+	GetFileContent(ctx context.Context, in *FileRequest, opts ...grpc.CallOption) (*FileContentResponse, error)
 	// delete file
 	DelFile(ctx context.Context, in *FileRequest, opts ...grpc.CallOption) (*FileResponse, error)
 	// list file versions
@@ -41,6 +43,15 @@ func NewFileMsServiceClient(cc grpc.ClientConnInterface) FileMsServiceClient {
 func (c *fileMsServiceClient) GetFile(ctx context.Context, in *FileRequest, opts ...grpc.CallOption) (*FileResponse, error) {
 	out := new(FileResponse)
 	err := c.cc.Invoke(ctx, "/proto.FileMsService/GetFile", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fileMsServiceClient) GetFileContent(ctx context.Context, in *FileRequest, opts ...grpc.CallOption) (*FileContentResponse, error) {
+	out := new(FileContentResponse)
+	err := c.cc.Invoke(ctx, "/proto.FileMsService/GetFileContent", in, out, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -69,8 +80,10 @@ func (c *fileMsServiceClient) ListFileVersions(ctx context.Context, in *FileRequ
 // All implementations should embed UnimplementedFileMsServiceServer
 // for forward compatibility
 type FileMsServiceServer interface {
-	// get file
+	// get file, return url
 	GetFile(context.Context, *FileRequest) (*FileResponse, error)
+	// get file content
+	GetFileContent(context.Context, *FileRequest) (*FileContentResponse, error)
 	// delete file
 	DelFile(context.Context, *FileRequest) (*FileResponse, error)
 	// list file versions
@@ -83,6 +96,9 @@ type UnimplementedFileMsServiceServer struct {
 
 func (UnimplementedFileMsServiceServer) GetFile(context.Context, *FileRequest) (*FileResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetFile not implemented")
+}
+func (UnimplementedFileMsServiceServer) GetFileContent(context.Context, *FileRequest) (*FileContentResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method GetFileContent not implemented")
 }
 func (UnimplementedFileMsServiceServer) DelFile(context.Context, *FileRequest) (*FileResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DelFile not implemented")
@@ -116,6 +132,24 @@ func _FileMsService_GetFile_Handler(srv interface{}, ctx context.Context, dec fu
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(FileMsServiceServer).GetFile(ctx, req.(*FileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FileMsService_GetFileContent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(FileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FileMsServiceServer).GetFileContent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/proto.FileMsService/GetFileContent",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FileMsServiceServer).GetFileContent(ctx, req.(*FileRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -166,6 +200,10 @@ var FileMsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetFile",
 			Handler:    _FileMsService_GetFile_Handler,
+		},
+		{
+			MethodName: "GetFileContent",
+			Handler:    _FileMsService_GetFileContent_Handler,
 		},
 		{
 			MethodName: "DelFile",

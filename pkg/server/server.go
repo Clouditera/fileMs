@@ -3,14 +3,17 @@ package server
 // grpc server
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fileMS/pkg/config"
 	FS "fileMS/pkg/minio"
 	"fileMS/services"
 	"fmt"
 	"github.com/gannicus-w/yunqi_mysql/sqls"
+	"github.com/minio/minio-go/v6"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
+	"io"
 	"net"
 	"net/url"
 	"path"
@@ -28,8 +31,8 @@ func (f fileMsServer) GetFile(ctx context.Context, request *FileRequest) (*FileR
 
 	fileChunk := services.FileMsService.Take("uuid", request.Uuid)
 	if fileChunk == nil {
-		logrus.Errorf("GetFileChunkByUUID failed by uuid: %s", request.Uuid)
-		return nil, fmt.Errorf("GetFileChunkByUUID failed by uuid: %s", request.Uuid)
+		logrus.Errorf("GetFile failed by uuid: %s, when qurey in mysql", request.Uuid)
+		return nil, fmt.Errorf("GetFile failed by uuid: %s, when qurey in mysql", request.Uuid)
 	}
 	if nil != fileChunk.DeletedAt {
 		return nil, fmt.Errorf("file %s is deleted", request.Uuid)
@@ -50,6 +53,55 @@ func (f fileMsServer) GetFile(ctx context.Context, request *FileRequest) (*FileR
 	}, nil
 }
 
+func (f fileMsServer) GetFileContent(ctx context.Context, request *FileRequest) (*FileContentResponse, error) {
+	if nil == request || "" == request.Uuid {
+		return nil, errors.New("input is null")
+	}
+
+	fileChunk := services.FileMsService.Take("uuid", request.Uuid)
+	if fileChunk == nil {
+		logrus.Errorf("GetFileContent failed by uuid: %s, when qurey in mysql", request.Uuid)
+		return nil, fmt.Errorf("GetFileContent failed by uuid: %s, when qurey in mysql", request.Uuid)
+	}
+	if nil != fileChunk.DeletedAt {
+		return nil, fmt.Errorf("file %s is deleted", request.Uuid)
+	}
+
+	bucketName := config.Instance.Minio.Bucket
+	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, path.Join(request.Uuid[0:1], request.Uuid[1:2], request.Uuid)), "/")
+
+	object, err := FS.ClientMinio.Client1.GetObject(bucketName, objectName, minio.GetObjectOptions{})
+	if err != nil {
+		logrus.Errorf("GetFileContent failed by uuid: %s", request.Uuid)
+		return nil, fmt.Errorf("GetFileContent failed by uuid: %s", request.Uuid)
+	}
+	defer object.Close()
+
+	objectInfo, err := object.Stat()
+	if err != nil {
+		logrus.Errorf("GetFileContent failed by uuid: %s, when object state", request.Uuid)
+		return nil, fmt.Errorf("GetFileContent failed by uuid: %s, when object state", request.Uuid)
+	}
+	// 200M
+	if objectInfo.Size >= 1024*1024*200 {
+		logrus.Errorf("GetFileContent failed by uuid: %s, the content more than 200M", request.Uuid)
+		return nil, fmt.Errorf("GetFileContent failed by uuid: %s, the content more than 200M", request.Uuid)
+	}
+
+	fileBytes, err := io.ReadAll(object)
+	if err != nil {
+		logrus.Errorf("GetFileContent failed by uuid: %s, when read content", request.Uuid)
+		return nil, fmt.Errorf("GetFileContent failed by uuid: %s, when read content", request.Uuid)
+	}
+	encoded := base64.StdEncoding.EncodeToString(fileBytes)
+
+	return &FileContentResponse{
+		Uuid:    fileChunk.UUID,
+		File:    fileChunk.FileName,
+		Content: encoded,
+	}, nil
+}
+
 func (f fileMsServer) DelFile(ctx context.Context, request *FileRequest) (*FileResponse, error) {
 	if nil == request || "" == request.Uuid {
 		return nil, errors.New("input is null")
@@ -57,8 +109,8 @@ func (f fileMsServer) DelFile(ctx context.Context, request *FileRequest) (*FileR
 
 	fileChunk := services.FileMsService.Take("uuid", request.Uuid)
 	if fileChunk == nil {
-		logrus.Errorf("GetFileChunkByUUID failed by uuid: %s", request.Uuid)
-		return nil, fmt.Errorf("GetFileChunkByUUID failed by uuid: %s", request.Uuid)
+		logrus.Errorf("DelFile failed by uuid: %s, when qurey in mysql", request.Uuid)
+		return nil, fmt.Errorf("DelFile failed by uuid: %s, when qurey in mysql", request.Uuid)
 	}
 	if nil != fileChunk.DeletedAt {
 		return nil, fmt.Errorf("file %s is deleted", request.Uuid)
@@ -91,8 +143,8 @@ func (f fileMsServer) ListFileVersions(ctx context.Context, request *FileRequest
 
 	fileChunk := services.FileMsService.Take("uuid", request.Uuid)
 	if fileChunk == nil {
-		logrus.Errorf("GetFileChunkByUUID failed by uuid: %s", request.Uuid)
-		return nil, fmt.Errorf("GetFileChunkByUUID failed by uuid: %s", request.Uuid)
+		logrus.Errorf("ListFileVersions failed by uuid: %s, when qurey in mysql", request.Uuid)
+		return nil, fmt.Errorf("ListFileVersions failed by uuid: %s, when qurey in mysql", request.Uuid)
 	}
 	if nil != fileChunk.DeletedAt {
 		return nil, fmt.Errorf("file %s is deleted", request.Uuid)
@@ -104,7 +156,7 @@ func (f fileMsServer) ListFileVersions(ctx context.Context, request *FileRequest
 	}
 	var versions []string
 	for k, v := range files {
-		versions = append(versions, "V"+strconv.Itoa(k)+" "+v.CreatedAt.GoString())
+		versions = append(versions, "V"+strconv.Itoa(k)+" "+v.CreatedAt.String())
 	}
 
 	return &FileVersionResponse{

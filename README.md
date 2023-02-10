@@ -34,3 +34,9 @@ sh build.sh
 或：
 go run main.go
 ```
+
+
+*技术栈*
+- iris ([https://github.com/kataras/iris](https://github.com/kataras/iris)) Go语言 mvc 框架
+- gorm ([http://gorm.io/](http://gorm.io/)) 最好用的Go语言数据库orm框架
+- resty ([https://github.com/go-resty/resty](https://github.com/go-resty/resty)) Go语言好用的 http-client

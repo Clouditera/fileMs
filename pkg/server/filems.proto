@@ -6,8 +6,10 @@ package proto; // 设置包名
 
 // fileMs service define.
 service FileMsService {
-  // get file
+  // get file, return url
   rpc GetFile(FileRequest) returns (FileResponse) {}
+  // get file content
+  rpc GetFileContent(FileRequest) returns (FileContentResponse) {}
   // delete file
   rpc DelFile(FileRequest) returns (FileResponse) {}
   // list file versions
@@ -23,6 +25,12 @@ message FileResponse {
   string uuid = 1;
   string file = 2; //name
   string url =3;
+}
+
+message FileContentResponse {
+  string uuid = 1;
+  string file = 2; //name
+  string content =3;
 }
 
 message  FileVersionResponse {

@@ -6,6 +6,7 @@ import (
 	"fileMS/pkg/common"
 	"fileMS/pkg/config"
 	"fileMS/pkg/minio"
+	grpc "fileMS/pkg/server"
 	"flag"
 	"github.com/gannicus-w/yunqi_mysql/sqls"
 	"io"
@@ -58,12 +59,15 @@ func init() {
 		logrus.Infof("success to connect MySQL [%s]", conf.DB.Url)
 	}
 
-	// 启动grpc server
-	//if err := grpc.InitServer(conf.GrpcPort); err != nil {
-	//	logrus.Error(err)
-	//} else {
-	//	logrus.Infof("success to start grpc server")
-	//}
+	go func() {
+		//启动grpc server
+		if err := grpc.InitServer(conf.GrpcPort); err != nil {
+			logrus.Error(err)
+		} else {
+			logrus.Infof("success to start grpc server")
+		}
+	}()
+
 }
 
 func main() {
