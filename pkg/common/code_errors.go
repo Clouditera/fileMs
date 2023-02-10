@@ -42,10 +42,11 @@ const (
 	ErrPramType     = 1002 // 参数类型错误
 	ErrDBOperate    = 2000 // 操作数据库异常
 
-	ErrBusiness    = 3000 // 业务异常
-	ErrBusUpload   = 3001 // 上传失败
-	ErrBusDownload = 3002 // 下载失败
-	ErrBusDelete   = 3003 // 删除失败
+	ErrBusiness         = 3000 // 业务异常
+	ErrBusUpload        = 3001 // 上传失败
+	ErrBusDownload      = 3002 // 下载失败
+	ErrBusDelete        = 3003 // 删除失败
+	ErrBusUpdateContent = 3004
 
 	ErrLogin  = 4000 // 用户名密码错误
 	ErrSign   = 4001 // 注册失败

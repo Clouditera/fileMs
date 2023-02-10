@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/xml"
 	"fileMS/model"
@@ -10,8 +11,10 @@ import (
 	"fileMS/pkg/minio/minio_ext"
 	"fileMS/services"
 	"fmt"
+	"github.com/gannicus-w/yunqi_mysql/sqls"
 	"github.com/kataras/iris/v12"
 	"github.com/minio/minio-go/v6"
+	"github.com/mlogclub/simple/common/digests"
 	"github.com/mlogclub/simple/web"
 	"github.com/mlogclub/simple/web/params"
 	gouuid "github.com/satori/go.uuid"
@@ -63,11 +66,12 @@ func (c *FileController) GetChunks() *web.JsonResult {
 	var uuid, uploaded, uploadID, chunks string
 
 	fileMD5 := params.FormValue(c.Ctx, "md5")
+	fileName := params.FormValue(c.Ctx, "fileName")
 	bucketName := config.Instance.Minio.Bucket
 
 	for {
 		// TODO 验证take
-		fileChunk := services.FileMsService.Take("md5", fileMD5)
+		fileChunk := services.FileMsService.FindOne(sqls.NewCnd().Eq("md5", fileMD5).Eq("fileName", fileName))
 		if fileChunk == nil {
 			logrus.Errorf("GetFileChunkByMD5 failed by md5: %s", fileMD5)
 			break
@@ -321,33 +325,108 @@ func (c *FileController) PostUpload() *web.JsonResult {
 	})
 }
 
-// PutUpdate 更新文本文件内容
-func (c *FileController) PutUpdate() *web.JsonResult {
-	return web.JsonSuccess()
+// PutUpdateContent 更新文本文件内容
+func (c *FileController) PutUpdateContent() *web.JsonResult {
+	uuid := c.Ctx.PostValue("uuid")
+	content := c.Ctx.PostValue("content")
+	fileChunk := services.FileMsService.Take("uuid", uuid)
+	if fileChunk == nil {
+		logrus.Errorf("GetFileChunkByUUID failed by uuid: %s", uuid)
+		return web.JsonErrorCode(http.StatusInternalServerError, "GetFileChunkByUUID failed.")
+	}
+
+	bucketName := config.Instance.Minio.Bucket
+	// 重新计算Md5
+	reader := bytes.NewBufferString(content)
+	md5 := digests.MD5(content)
+	var uploadID string
+	fileChunkMd5 := services.FileMsService.FindOne(sqls.NewCnd().Eq("md5", md5).Eq("fileName", fileChunk.FileName))
+	if nil != fileChunkMd5 {
+		uuid = fileChunkMd5.UUID
+
+		uploadID = fileChunkMd5.UploadID
+
+		objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, path.Join(uuid[0:1], uuid[1:2], uuid)), "/")
+
+		isExist, err := isObjectExist(bucketName, objectName)
+		if err != nil {
+			logrus.Errorf("isObjectExist failed: %s", err)
+		}
+
+		if isExist {
+			if fileChunk.IsUploaded != model.FileUploaded {
+				logrus.Info("the file has been uploaded but not recorded")
+
+				fileChunk.IsUploaded = 1
+				if err = services.FileMsService.UpdateColumn(fileChunk.Id, "is_uploaded", fileChunk.IsUploaded); err != nil {
+					logrus.Errorf("UpdateFileChunk failed: %s", err)
+				}
+			}
+		} else {
+			if fileChunk.IsUploaded == model.FileUploaded {
+				logrus.Info("the file has been recorded but not uploaded")
+				fileChunk.IsUploaded = 0
+				if err = services.FileMsService.UpdateColumn(fileChunk.Id, "is_uploaded", fileChunk.IsUploaded); err != nil {
+					logrus.Errorf("UpdateFileChunk failed: %s", err)
+				}
+			}
+		}
+		return web.JsonData(map[string]interface{}{
+			"uuid": fileChunk.UUID,
+			"file": fileChunk.FileName,
+			"size": fileChunk.Size,
+			"md5":  md5,
+		})
+	}
+
+	uuidNew := gouuid.NewV4().String()
+	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, path.Join(uuidNew[0:1], uuidNew[1:2], uuidNew)), "/")
+	uploadID, err := newMultiPartUpload(uuidNew)
+	if err != nil {
+		logrus.Errorf("newMultiPartUpload failed: %s", err)
+		return web.JsonErrorCode(http.StatusInternalServerError, "newMultiPartUpload failed.")
+	}
+	n, err := FS.ClientMinio.Client1.PutObject(bucketName, objectName, reader, int64(reader.Len()), minio.PutObjectOptions{})
+	if err != nil {
+		logrus.Errorf("errCode: %d, errDescriotion: 更新文件内容失败 %v ", common.ServiceFS+common.ModuleMinio+common.ErrBusUpdateContent, err)
+		return web.JsonErrorCode(common.ServiceFS+common.ModuleMinio+common.ErrBusUpdateContent, "更新文件内容失败")
+	}
+
+	err = services.FileMsService.Create(&model.FileChunk{
+		UUID:        uuidNew,
+		UploadID:    uploadID,
+		Md5:         md5,
+		Size:        n,
+		FileName:    fileChunk.FileName,
+		TotalChunks: 1,
+	})
+	if err != nil {
+		logrus.Errorf("InsertFileChunk failed: %s", err)
+		return web.JsonErrorCode(http.StatusInternalServerError, "InsertFileChunk failed.")
+	}
+
+	return web.JsonData(map[string]interface{}{
+		"uuid": uuidNew,
+		"file": fileChunk.FileName,
+		"size": n,
+		"md5":  md5,
+	})
 }
 
 // GetContent 获取文本文件内容 (文本不能太大)
 func (c *FileController) GetContent() *web.JsonResult {
-	// TODO 用户身份权限识别
-	bucket := params.FormValue(c.Ctx, "bucket")
-	//bucket := c.Ctx.GetHeader("bucket")
-	file := params.FormValue(c.Ctx, "file")
-	prefix := params.FormValue(c.Ctx, "prefix")
+	uuid := params.FormValue(c.Ctx, "uuid")
 
-	// TODO 判断bucket是否存在; bucket访问权限等
-	if bucket == "" {
-		return web.JsonErrorCode(common.ServiceFS+common.ModuleFS+common.ErrPramNull, "参数为空")
-	}
-	exists, errBucketExists := FS.ClientMinio.Client1.BucketExists(bucket)
-	if !exists {
-		logrus.Errorf("errCode: %d, errDescriotion: bucket %s 不存在", common.ServiceFS+common.ModuleFS+common.ErrNotFound, bucket)
-		return web.JsonErrorCode(common.ServiceFS+common.ModuleMinio+common.ErrNotFound, "bucket不存在")
-	} else if errBucketExists != nil {
-		logrus.Errorf("errCode: %d, errDescriotion: 查询存储桶状态异常 %v ", common.ServiceFS+common.ModuleMinio+common.ErrPermission, errBucketExists)
-		return web.JsonErrorCode(common.ServiceFS+common.ModuleMinio+common.ErrPermission, "查询存储桶状态异常")
+	fileChunk := services.FileMsService.Take("uuid", uuid)
+	if fileChunk == nil {
+		logrus.Errorf("GetFileChunkByUUID failed by uuid: %s", uuid)
+		return web.JsonErrorCode(http.StatusInternalServerError, "GetFileChunkByUUID failed.")
 	}
 
-	object, err := FS.ClientMinio.Client1.GetObject(bucket, prefix+file, minio.GetObjectOptions{})
+	bucketName := config.Instance.Minio.Bucket
+	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, path.Join(uuid[0:1], uuid[1:2], uuid)), "/")
+
+	object, err := FS.ClientMinio.Client1.GetObject(bucketName, objectName, minio.GetObjectOptions{})
 	if err != nil {
 		logrus.Errorf("errCode: %d, errDescriotion: 下载文件失败 %v ", common.ServiceFS+common.ModuleMinio+common.ErrBusDownload, err)
 		return web.JsonErrorCode(common.ServiceFS+common.ModuleMinio+common.ErrBusDownload, "下载文件失败")
@@ -363,7 +442,8 @@ func (c *FileController) GetContent() *web.JsonResult {
 
 	return web.JsonData(
 		map[string]interface{}{
-			"file": file,
+			"uuid": uuid,
+			"file": fileChunk.FileName,
 			"data": encoded,
 		})
 }

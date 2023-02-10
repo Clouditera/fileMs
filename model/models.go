@@ -23,7 +23,7 @@ type FileChunk struct {
 	Model
 
 	UUID           string `gorm:"UNIQUE"`
-	Md5            string `gorm:"UNIQUE"`
+	Md5            string // `gorm:"UNIQUE"`
 	IsUploaded     int    `gorm:"DEFAULT 0"` // not uploaded: 0, uploaded: 1
 	UploadID       string `gorm:"UNIQUE"`    //minio upload id
 	TotalChunks    int
