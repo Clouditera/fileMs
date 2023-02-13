@@ -1,33 +1,36 @@
-package whitelist
+package test
 
 import (
 	"bufio"
+	"fmt"
 	"github.com/sirupsen/logrus"
 	"io"
 	"os"
+	"testing"
 )
 
-var Whitelist = make(map[string]bool)
+var WhitelistTest = make(map[string]bool)
 
-func init() {
-	f, err := os.OpenFile("./pkg/whitelist/whitelist.txt", os.O_RDONLY, 0644)
+func TestReadOneLine(t *testing.T) {
+	f, err := os.OpenFile("../pkg/whitelist/whitelist.txt", os.O_RDONLY, 0644)
 	if nil != err {
 		logrus.Error("failed to open whitelist")
-		return
 	}
 	defer f.Close()
 	fInfo, err := f.Stat()
 	if nil != err {
 		logrus.Error("failed to state file")
-		return
 	}
+
 	reader := bufio.NewReaderSize(f, int(fInfo.Size()))
 	for {
 		l, e := reader.ReadBytes('\n')
-		Whitelist[string(l)] = true
+		WhitelistTest[string(l)] = true
 		if io.EOF == e {
 			break
 		}
 	}
-	return
+	fmt.Println(WhitelistTest["部署脚本说明.pdf"])
+	fmt.Println(WhitelistTest["部署脚本说明1.pdf"])
+
 }

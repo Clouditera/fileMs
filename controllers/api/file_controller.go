@@ -81,7 +81,7 @@ func (c *FileController) GetChunks() *web.JsonResult {
 		uploaded = strconv.Itoa(fileChunk.IsUploaded)
 		uploadID = fileChunk.UploadID
 
-		objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, path.Join(uuid[0:1], uuid[1:2], uuid)), "/")
+		objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, uuid[0:1], uuid[1:2], uuid, fileName), "/")
 
 		isExist, err := isObjectExist(bucketName, objectName)
 		if err != nil {
@@ -165,7 +165,7 @@ func (c *FileController) GetNewMultipart() *web.JsonResult {
 	}
 
 	uuid = gouuid.NewV4().String()
-	uploadID, err = newMultiPartUpload(uuid)
+	uploadID, err = newMultiPartUpload(uuid, fileName)
 	if err != nil {
 		logrus.Errorf("newMultiPartUpload failed: %s", err)
 		return web.JsonErrorCode(http.StatusInternalServerError, "newMultiPartUpload failed.")
@@ -195,6 +195,7 @@ func (c *FileController) GetMultipartUploadUrl() *web.JsonResult {
 	var url string
 	uuid := params.FormValue(c.Ctx, "uuid")
 	uploadID := params.FormValue(c.Ctx, "uploadID")
+	fileName := params.FormValue(c.Ctx, "fileName")
 
 	partNumber, err := params.FormValueInt(c.Ctx, "chunkNumber")
 	if err != nil {
@@ -209,7 +210,7 @@ func (c *FileController) GetMultipartUploadUrl() *web.JsonResult {
 		return web.JsonErrorCode(http.StatusBadRequest, "size is illegal.")
 	}
 
-	url, err = genMultiPartSignedUrl(uuid, uploadID, partNumber, size)
+	url, err = genMultiPartSignedUrl(uuid, uploadID, fileName, partNumber, size)
 	if err != nil {
 		logrus.Errorf("genMultiPartSignedUrl failed: %s", err)
 		return web.JsonErrorCode(http.StatusInternalServerError, "genMultiPartSignedUrl failed.")
@@ -230,7 +231,7 @@ func (c *FileController) PostCompleteMultipart() *web.JsonResult {
 		return web.JsonErrorCode(http.StatusInternalServerError, "GetFileChunkByUUID failed.")
 	}
 
-	_, err := completeMultiPartUpload(uuid, uploadID)
+	_, err := completeMultiPartUpload(uuid, uploadID, fileChunk.FileName)
 	if err != nil {
 		logrus.Errorf("completeMultiPartUpload failed: %s", err)
 		return web.JsonErrorCode(http.StatusInternalServerError, "completeMultiPartUpload failed.")
@@ -346,7 +347,7 @@ func (c *FileController) PutUpdateContent() *web.JsonResult {
 
 		uploadID = fileChunkMd5.UploadID
 
-		objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, path.Join(uuid[0:1], uuid[1:2], uuid)), "/")
+		objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, uuid[0:1], uuid[1:2], uuid, fileChunk.FileName), "/")
 
 		isExist, err := isObjectExist(bucketName, objectName)
 		if err != nil {
@@ -380,8 +381,8 @@ func (c *FileController) PutUpdateContent() *web.JsonResult {
 	}
 
 	uuidNew := gouuid.NewV4().String()
-	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, path.Join(uuidNew[0:1], uuidNew[1:2], uuidNew)), "/")
-	uploadID, err := newMultiPartUpload(uuidNew)
+	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, uuidNew[0:1], uuidNew[1:2], uuidNew, fileChunk.FileName), "/")
+	uploadID, err := newMultiPartUpload(uuidNew, fileChunk.FileName)
 	if err != nil {
 		logrus.Errorf("newMultiPartUpload failed: %s", err)
 		return web.JsonErrorCode(http.StatusInternalServerError, "newMultiPartUpload failed.")
@@ -424,7 +425,7 @@ func (c *FileController) GetContent() *web.JsonResult {
 	}
 
 	bucketName := config.Instance.Minio.Bucket
-	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, path.Join(uuid[0:1], uuid[1:2], uuid)), "/")
+	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, uuid[0:1], uuid[1:2], uuid, fileChunk.FileName), "/")
 
 	object, err := FS.ClientMinio.Client1.GetObject(bucketName, objectName, minio.GetObjectOptions{})
 	if err != nil {
@@ -457,7 +458,7 @@ func (c *FileController) GetDownload() *web.JsonResult {
 	}
 
 	bucketName := config.Instance.Minio.Bucket
-	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, path.Join(uuid[0:1], uuid[1:2], uuid)), "/")
+	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, uuid[0:1], uuid[1:2], uuid, fileChunk.FileName), "/")
 
 	url, err := FS.ClientMinio.Client1.PresignedGetObject(bucketName, objectName, time.Second*1000, url.Values{})
 	if nil != err {
@@ -494,7 +495,7 @@ func (c *FileController) Delete() *web.JsonResult {
 			})
 	}
 
-	_, err := deleteObject(uuid)
+	_, err := deleteObject(uuid, fileChunk.FileName)
 	if err != nil {
 		logrus.Errorf("errCode: %d, errDescriotion: 文件 %s 删除失败", common.ServiceFS+common.ModuleMinio+common.ErrBusDelete, uuid)
 		return web.JsonErrorCode(common.ServiceFS+common.ModuleMinio+common.ErrBusDelete, "删除文件失败")
@@ -538,7 +539,7 @@ func isObjectExist(bucketName string, objectName string) (bool, error) {
 	return isExist, nil
 }
 
-func newMultiPartUpload(uuid string) (string, error) {
+func newMultiPartUpload(uuid, fileName string) (string, error) {
 	cl, err := FS.ClientMinio.GetMinioClient(config.Instance)
 	if err != nil {
 		logrus.Errorf("GetMinioClient failed: %s", err)
@@ -546,12 +547,12 @@ func newMultiPartUpload(uuid string) (string, error) {
 	}
 
 	bucketName := config.Instance.Minio.Bucket
-	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, path.Join(uuid[0:1], uuid[1:2], uuid)), "/")
+	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, uuid[0:1], uuid[1:2], uuid, fileName), "/")
 
 	return cl.Client2.NewMultipartUpload(bucketName, objectName, minio.PutObjectOptions{})
 }
 
-func genMultiPartSignedUrl(uuid string, uploadId string, partNumber int, partSize int64) (string, error) {
+func genMultiPartSignedUrl(uuid string, uploadId string, fileName string, partNumber int, partSize int64) (string, error) {
 	cl, err := FS.ClientMinio.GetMinioClient(config.Instance)
 	if err != nil {
 		logrus.Errorf("GetMinioClient failed: %s", err)
@@ -559,13 +560,14 @@ func genMultiPartSignedUrl(uuid string, uploadId string, partNumber int, partSiz
 	}
 
 	bucketName := config.Instance.Minio.Bucket
-	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, path.Join(uuid[0:1], uuid[1:2], uuid)), "/")
+	//objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, path.Join(uuid[0:1], uuid[1:2], uuid)), "/")
+	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, uuid[0:1], uuid[1:2], uuid, fileName), "/")
 
 	return cl.Client3.GenUploadPartSignedUrl(uploadId, bucketName, objectName, partNumber, partSize, PresignedUploadPartUrlExpireTime, config.Instance.Minio.Location)
 
 }
 
-func completeMultiPartUpload(uuid string, uploadID string) (string, error) {
+func completeMultiPartUpload(uuid string, uploadID, fileName string) (string, error) {
 	cl, err := FS.ClientMinio.GetMinioClient(config.Instance)
 	if err != nil {
 		logrus.Errorf("GetMinioClient failed: %s", err)
@@ -573,7 +575,7 @@ func completeMultiPartUpload(uuid string, uploadID string) (string, error) {
 	}
 
 	bucketName := config.Instance.Minio.Bucket
-	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, path.Join(uuid[0:1], uuid[1:2], uuid)), "/")
+	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, uuid[0:1], uuid[1:2], uuid, fileName), "/")
 
 	partInfos, err := cl.Client3.ListObjectParts(bucketName, objectName, uploadID)
 	if err != nil {
@@ -595,7 +597,7 @@ func completeMultiPartUpload(uuid string, uploadID string) (string, error) {
 	return cl.Client2.CompleteMultipartUpload(bucketName, objectName, uploadID, complMultipartUpload.Parts)
 }
 
-func deleteObject(uuid string) (string, error) {
+func deleteObject(uuid, fileName string) (string, error) {
 	cl, err := FS.ClientMinio.GetMinioClient(config.Instance)
 	if err != nil {
 		logrus.Errorf("GetMinioClient failed: %s", err)
@@ -603,7 +605,7 @@ func deleteObject(uuid string) (string, error) {
 	}
 
 	bucketName := config.Instance.Minio.Bucket
-	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, path.Join(uuid[0:1], uuid[1:2], uuid)), "/")
+	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, uuid[0:1], uuid[1:2], uuid, fileName), "/")
 
 	err = cl.Client1.RemoveObject(bucketName, objectName)
 	if err != nil {

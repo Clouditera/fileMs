@@ -74,5 +74,6 @@ func main() {
 	if common.IsProd() {
 		// TODO: 预留
 	}
+
 	controllers.Router()
 }

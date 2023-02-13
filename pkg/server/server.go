@@ -39,7 +39,7 @@ func (f fileMsServer) GetFile(ctx context.Context, request *FileRequest) (*FileR
 	}
 
 	bucketName := config.Instance.Minio.Bucket
-	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, path.Join(request.Uuid[0:1], request.Uuid[1:2], request.Uuid)), "/")
+	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, path.Join(request.Uuid[0:1], request.Uuid[1:2], request.Uuid, fileChunk.FileName)), "/")
 	url, err := FS.ClientMinio.Client1.PresignedGetObject(bucketName, objectName, time.Second*1000, url.Values{})
 	if nil != err {
 		logrus.Errorf("PresignedGetObject failed by uuid: %s", request.Uuid)
@@ -68,7 +68,7 @@ func (f fileMsServer) GetFileContent(ctx context.Context, request *FileRequest) 
 	}
 
 	bucketName := config.Instance.Minio.Bucket
-	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, path.Join(request.Uuid[0:1], request.Uuid[1:2], request.Uuid)), "/")
+	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, path.Join(request.Uuid[0:1], request.Uuid[1:2], request.Uuid, fileChunk.FileName)), "/")
 
 	object, err := FS.ClientMinio.Client1.GetObject(bucketName, objectName, minio.GetObjectOptions{})
 	if err != nil {
@@ -117,7 +117,7 @@ func (f fileMsServer) DelFile(ctx context.Context, request *FileRequest) (*FileR
 	}
 
 	bucketName := config.Instance.Minio.Bucket
-	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, path.Join(request.Uuid[0:1], request.Uuid[1:2], request.Uuid)), "/")
+	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, path.Join(request.Uuid[0:1], request.Uuid[1:2], request.Uuid, fileChunk.FileName)), "/")
 	if err := FS.ClientMinio.Client1.RemoveObject(bucketName, objectName); nil != err {
 		logrus.Errorf("deleteObject failed: %s", err)
 		return nil, err
