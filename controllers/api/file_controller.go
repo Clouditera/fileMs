@@ -340,12 +340,9 @@ func (c *FileController) PutUpdateContent() *web.JsonResult {
 	// 重新计算Md5
 	reader := bytes.NewBufferString(content)
 	md5 := digests.MD5(content)
-	var uploadID string
 	fileChunkMd5 := services.FileMsService.FindOne(sqls.NewCnd().Eq("md5", md5).Eq("fileName", fileChunk.FileName))
 	if nil != fileChunkMd5 {
 		uuid = fileChunkMd5.UUID
-
-		uploadID = fileChunkMd5.UploadID
 
 		objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, uuid[0:1], uuid[1:2], uuid, fileChunk.FileName), "/")
 
