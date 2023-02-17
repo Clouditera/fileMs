@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/xml"
+	"github.com/minio/minio-go/v6/pkg/s3utils"
 	"io"
 	"io/ioutil"
 	"net"
@@ -11,8 +12,6 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
-
-	"github.com/minio/minio-go/v6/pkg/s3utils"
 )
 
 // regCred matches credential string in HTTP header
@@ -182,4 +181,9 @@ func sum256Hex(data []byte) string {
 	hash := sha256.New()
 	hash.Write(data)
 	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func trimEtag(etag string) string {
+	etag = strings.TrimPrefix(etag, "\"")
+	return strings.TrimSuffix(etag, "\"")
 }

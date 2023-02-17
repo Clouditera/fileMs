@@ -2,18 +2,19 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
-	"encoding/xml"
 	"fileMS/model"
 	"fileMS/pkg/common"
 	"fileMS/pkg/config"
 	FS "fileMS/pkg/minio"
 	"fileMS/pkg/minio/minio_ext"
+	"fileMS/pkg/whitelist"
 	"fileMS/services"
 	"fmt"
 	"github.com/gannicus-w/yunqi_mysql/sqls"
 	"github.com/kataras/iris/v12"
-	"github.com/minio/minio-go/v6"
+	miniov7 "github.com/minio/minio-go/v7"
 	"github.com/mlogclub/simple/common/digests"
 	"github.com/mlogclub/simple/web"
 	"github.com/mlogclub/simple/web/params"
@@ -38,28 +39,11 @@ type FileController struct {
 	Ctx iris.Context
 }
 
-type ComplPart struct {
-	PartNumber int    `json:"partNumber"`
-	ETag       string `json:"eTag"`
-}
-
-type CompleteParts struct {
-	Data []ComplPart `json:"completedParts"`
-}
-
-// completedParts is a collection of parts sortable by their part numbers.
-// used for sorting the uploaded parts before completing the multipart request.
-type completedParts []minio.CompletePart
+type completedParts []minio_ext.CompletePart
 
 func (a completedParts) Len() int           { return len(a) }
 func (a completedParts) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a completedParts) Less(i, j int) bool { return a[i].PartNumber < a[j].PartNumber }
-
-// completeMultipartUpload container for completing multipart upload.
-type completeMultipartUpload struct {
-	XMLName xml.Name             `xml:"http://s3.amazonaws.com/doc/2006-03-01/ CompleteMultipartUpload" json:"-"`
-	Parts   []minio.CompletePart `xml:"Part"`
-}
 
 func (c *FileController) GetChunks() *web.JsonResult {
 	var res = -1
@@ -71,19 +55,20 @@ func (c *FileController) GetChunks() *web.JsonResult {
 
 	for {
 		// TODO 验证take
-		fileChunk := services.FileMsService.FindOne(sqls.NewCnd().Eq("md5", fileMD5).Eq("file_name", fileName))
-		if fileChunk == nil {
+		fileChunk := services.FileMsService.Find(sqls.NewCnd().Eq("md5", fileMD5).Eq("file_name", fileName).Desc("id").Limit(1))
+		if len(fileChunk) == 0 || fileChunk[0].DeletedAt != nil {
 			logrus.Errorf("GetFileChunkByMD5 failed by md5: %s, file name: %s", fileMD5, fileName)
 			break
 		}
 
-		uuid = fileChunk.UUID
-		uploaded = strconv.Itoa(fileChunk.IsUploaded)
-		uploadID = fileChunk.UploadID
+		uuid = fileChunk[0].UUID
+		uploaded = strconv.Itoa(fileChunk[0].IsUploaded)
+		uploadID = fileChunk[0].UploadID
 
-		objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, uuid[0:1], uuid[1:2], uuid, fileName), "/")
+		prefix := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, uuid[0:1], uuid[1:2]), "/")
+		objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, uuid[0:1], uuid[1:2], fileChunk[0].FileName), "/")
 
-		isExist, err := isObjectExist(bucketName, objectName)
+		isExist, err := isObjectExist(c.Ctx, bucketName, prefix)
 		if err != nil {
 			logrus.Errorf("isObjectExist failed: %s", err)
 			break
@@ -91,11 +76,11 @@ func (c *FileController) GetChunks() *web.JsonResult {
 
 		if isExist {
 			uploaded = "1"
-			if fileChunk.IsUploaded != model.FileUploaded {
+			if fileChunk[0].IsUploaded != model.FileUploaded {
 				logrus.Info("the file has been uploaded but not recorded")
 
-				fileChunk.IsUploaded = 1
-				if err = services.FileMsService.UpdateColumn(fileChunk.Id, "is_uploaded", fileChunk.IsUploaded); err != nil {
+				fileChunk[0].IsUploaded = 1
+				if err = services.FileMsService.UpdateColumn(fileChunk[0].Id, "is_uploaded", fileChunk[0].IsUploaded); err != nil {
 					logrus.Errorf("UpdateFileChunk failed: %s", err)
 				}
 			}
@@ -103,10 +88,10 @@ func (c *FileController) GetChunks() *web.JsonResult {
 			break
 		} else {
 			uploaded = "0"
-			if fileChunk.IsUploaded == model.FileUploaded {
+			if fileChunk[0].IsUploaded == model.FileUploaded {
 				logrus.Info("the file has been recorded but not uploaded")
-				fileChunk.IsUploaded = 0
-				if err = services.FileMsService.UpdateColumn(fileChunk.Id, "is_uploaded", fileChunk.IsUploaded); err != nil {
+				fileChunk[0].IsUploaded = 0
+				if err = services.FileMsService.UpdateColumn(fileChunk[0].Id, "is_uploaded", fileChunk[0].IsUploaded); err != nil {
 					logrus.Errorf("UpdateFileChunk failed: %s", err)
 				}
 			}
@@ -164,25 +149,47 @@ func (c *FileController) GetNewMultipart() *web.JsonResult {
 		return web.JsonErrorCode(http.StatusBadRequest, "size is illegal.")
 	}
 
-	uuid = gouuid.NewV4().String()
-	uploadID, err = newMultiPartUpload(uuid, fileName)
-	if err != nil {
-		logrus.Errorf("newMultiPartUpload failed: %s", err)
-		return web.JsonErrorCode(http.StatusInternalServerError, "newMultiPartUpload failed.")
-	}
-
-	err = services.FileMsService.Create(&model.FileChunk{
-		UUID:        uuid,
-		UploadID:    uploadID,
-		Md5:         md5,
-		Size:        fileSize,
-		FileName:    fileName,
-		TotalChunks: totalChunkCounts,
-	})
-
-	if err != nil {
-		logrus.Errorf("InsertFileChunk failed: %s", err)
-		return web.JsonErrorCode(http.StatusInternalServerError, "InsertFileChunk failed.")
+	fileChunk := services.FileMsService.FindOne(sqls.NewCnd().Eq("md5", md5).Eq("file_name", fileName))
+	if fileChunk != nil {
+		uuid = fileChunk.UUID
+		uploadID, err = newMultiPartUpload(c.Ctx, uuid, fileName)
+		if err != nil {
+			logrus.Errorf("newMultiPartUpload failed: %s", err)
+			return web.JsonErrorCode(http.StatusInternalServerError, "newMultiPartUpload failed.")
+		}
+		if err = services.FileMsService.Updates(fileChunk.Id, map[string]interface{}{
+			"updated_at":      time.Now(),
+			"deleted_at":      nil,
+			"uuid":            uuid,
+			"md5":             md5,
+			"is_uploaded":     0,
+			"upload_id":       uploadID,
+			"total_chunks":    totalChunkCounts,
+			"size":            fileSize,
+			"file_name":       fileName,
+			"completed_parts": "",
+		}); err != nil {
+			logrus.Errorf("InsertFileChunk failed: %s", err)
+			return web.JsonErrorCode(http.StatusInternalServerError, "InsertFileChunk(update) failed.")
+		}
+	} else {
+		uuid = gouuid.NewV4().String()
+		uploadID, err = newMultiPartUpload(c.Ctx, uuid, fileName)
+		if err != nil {
+			logrus.Errorf("newMultiPartUpload failed: %s", err)
+			return web.JsonErrorCode(http.StatusInternalServerError, "newMultiPartUpload failed.")
+		}
+		if err = services.FileMsService.Create(&model.FileChunk{
+			UUID:        uuid,
+			UploadID:    uploadID,
+			Md5:         md5,
+			Size:        fileSize,
+			FileName:    fileName,
+			TotalChunks: totalChunkCounts,
+		}); err != nil {
+			logrus.Errorf("InsertFileChunk failed: %s", err)
+			return web.JsonErrorCode(http.StatusInternalServerError, "InsertFileChunk failed.")
+		}
 	}
 
 	return web.JsonData(map[string]interface{}{
@@ -231,7 +238,7 @@ func (c *FileController) PostCompleteMultipart() *web.JsonResult {
 		return web.JsonErrorCode(http.StatusInternalServerError, "GetFileChunkByUUID failed.")
 	}
 
-	_, err := completeMultiPartUpload(uuid, uploadID, fileChunk.FileName)
+	uploadInfo, err := completeMultiPartUpload(uuid, uploadID, fileChunk.FileName)
 	if err != nil {
 		logrus.Errorf("completeMultiPartUpload failed: %s", err)
 		return web.JsonErrorCode(http.StatusInternalServerError, "completeMultiPartUpload failed.")
@@ -243,10 +250,18 @@ func (c *FileController) PostCompleteMultipart() *web.JsonResult {
 		logrus.Errorf("UpdateFileChunk failed: %s", err)
 		return web.JsonErrorCode(http.StatusInternalServerError, "UpdateFileChunk failed.")
 	}
+	if err = services.FileMsVersionService.Create(&model.FileVersion{
+		FileChunkId: fileChunk.Id,
+		VersionId:   uploadInfo.VersionID,
+	}); err != nil {
+		logrus.Errorf("Create FileChunk version failed: %s", err)
+		return web.JsonErrorCode(http.StatusInternalServerError, "Create FileChunk version failed.")
+	}
 
 	return web.JsonData(map[string]interface{}{
-		"file": fileChunk.FileName,
-		"uuid": uuid,
+		"file":    fileChunk.FileName,
+		"uuid":    uuid,
+		"version": uploadInfo.VersionID,
 	})
 }
 
@@ -294,7 +309,7 @@ func (c *FileController) PostUpload() *web.JsonResult {
 	if bucket == "" {
 		return web.JsonErrorCode(common.ServiceFS+common.ModuleFS+common.ErrPramNull, "参数为空")
 	}
-	exists, errBucketExists := FS.ClientMinio.Client1.BucketExists(bucket)
+	exists, errBucketExists := FS.ClientMinio.Client1.BucketExists(c.Ctx, bucket)
 	if !exists {
 		logrus.Errorf("errCode: %d, errDescriotion: bucket %s 不存在", common.ServiceFS+common.ModuleFS+common.ErrNotFound, bucket)
 		return web.JsonErrorCode(common.ServiceFS+common.ModuleMinio+common.ErrNotFound, "bucket不存在")
@@ -305,7 +320,7 @@ func (c *FileController) PostUpload() *web.JsonResult {
 
 	begin := time.Now()
 
-	n, err := FS.ClientMinio.Client1.PutObject(bucket, prefix+info.Filename, file, info.Size, minio.PutObjectOptions{
+	n, err := FS.ClientMinio.Client1.PutObject(c.Ctx, bucket, prefix+info.Filename, file, info.Size, miniov7.PutObjectOptions{
 		ContentType: "application/octet-stream",
 		PartSize:    1024 * 1024 * 16,
 	})
@@ -326,7 +341,6 @@ func (c *FileController) PostUpload() *web.JsonResult {
 	})
 }
 
-// PutUpdateContent 更新文本文件内容
 func (c *FileController) PutUpdateContent() *web.JsonResult {
 	uuid := c.Ctx.PostValue("uuid")
 	content := c.Ctx.PostValue("content")
@@ -336,84 +350,53 @@ func (c *FileController) PutUpdateContent() *web.JsonResult {
 		return web.JsonErrorCode(http.StatusInternalServerError, "GetFileChunkByUUID failed.")
 	}
 
+	if whitelist.CheckList(fileChunk.FileName) {
+		return web.JsonErrorCode(common.ServiceFS+common.ModuleMinio+common.ErrForbidden, "modification of the preset file is prohibited")
+	}
+
 	bucketName := config.Instance.Minio.Bucket
 	// 重新计算Md5
 	reader := bytes.NewBufferString(content)
 	md5 := digests.MD5(content)
-	fileChunkMd5 := services.FileMsService.FindOne(sqls.NewCnd().Eq("md5", md5).Eq("fileName", fileChunk.FileName))
-	if nil != fileChunkMd5 {
-		uuid = fileChunkMd5.UUID
 
-		objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, uuid[0:1], uuid[1:2], uuid, fileChunk.FileName), "/")
+	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, uuid[0:1], uuid[1:2], uuid, fileChunk.FileName), "/")
 
-		isExist, err := isObjectExist(bucketName, objectName)
-		if err != nil {
-			logrus.Errorf("isObjectExist failed: %s", err)
-		}
-
-		if isExist {
-			if fileChunk.IsUploaded != model.FileUploaded {
-				logrus.Info("the file has been uploaded but not recorded")
-
-				fileChunk.IsUploaded = 1
-				if err = services.FileMsService.UpdateColumn(fileChunk.Id, "is_uploaded", fileChunk.IsUploaded); err != nil {
-					logrus.Errorf("UpdateFileChunk failed: %s", err)
-				}
-			}
-		} else {
-			if fileChunk.IsUploaded == model.FileUploaded {
-				logrus.Info("the file has been recorded but not uploaded")
-				fileChunk.IsUploaded = 0
-				if err = services.FileMsService.UpdateColumn(fileChunk.Id, "is_uploaded", fileChunk.IsUploaded); err != nil {
-					logrus.Errorf("UpdateFileChunk failed: %s", err)
-				}
-			}
-		}
-		return web.JsonData(map[string]interface{}{
-			"uuid": fileChunk.UUID,
-			"file": fileChunk.FileName,
-			"size": fileChunk.Size,
-			"md5":  md5,
-		})
-	}
-
-	uuidNew := gouuid.NewV4().String()
-	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, uuidNew[0:1], uuidNew[1:2], uuidNew, fileChunk.FileName), "/")
-	uploadID, err := newMultiPartUpload(uuidNew, fileChunk.FileName)
-	if err != nil {
-		logrus.Errorf("newMultiPartUpload failed: %s", err)
-		return web.JsonErrorCode(http.StatusInternalServerError, "newMultiPartUpload failed.")
-	}
-	n, err := FS.ClientMinio.Client1.PutObject(bucketName, objectName, reader, int64(reader.Len()), minio.PutObjectOptions{})
+	uploadInfo, err := FS.ClientMinio.Client1.PutObject(c.Ctx, bucketName, objectName, reader, int64(reader.Len()), miniov7.PutObjectOptions{})
 	if err != nil {
 		logrus.Errorf("errCode: %d, errDescriotion: 更新文件内容失败 %v ", common.ServiceFS+common.ModuleMinio+common.ErrBusUpdateContent, err)
 		return web.JsonErrorCode(common.ServiceFS+common.ModuleMinio+common.ErrBusUpdateContent, "更新文件内容失败")
 	}
 
-	err = services.FileMsService.Create(&model.FileChunk{
-		UUID:        uuidNew,
-		UploadID:    uploadID,
-		Md5:         md5,
-		Size:        n,
-		FileName:    fileChunk.FileName,
-		TotalChunks: 1,
-	})
-	if err != nil {
+	if err = services.FileMsService.Updates(fileChunk.Id, map[string]interface{}{
+		"md5":        md5,
+		"size":       uploadInfo.Size,
+		"deleted_at": nil,
+	}); err != nil {
 		logrus.Errorf("InsertFileChunk failed: %s", err)
 		return web.JsonErrorCode(http.StatusInternalServerError, "InsertFileChunk failed.")
 	}
 
+	if err = services.FileMsVersionService.Create(&model.FileVersion{
+		FileChunkId: fileChunk.Id,
+		VersionId:   uploadInfo.VersionID,
+	}); err != nil {
+		logrus.Errorf("Create FileChunk version failed: %s", err)
+		return web.JsonErrorCode(http.StatusInternalServerError, "Create FileChunk version failed.")
+	}
+
 	return web.JsonData(map[string]interface{}{
-		"uuid": uuidNew,
-		"file": fileChunk.FileName,
-		"size": n,
-		"md5":  md5,
+		"uuid":    uuid,
+		"file":    fileChunk.FileName,
+		"size":    uploadInfo.Size,
+		"md5":     md5,
+		"version": uploadInfo.VersionID,
 	})
 }
 
 // GetContent 获取文本文件内容 (文本不能太大)
 func (c *FileController) GetContent() *web.JsonResult {
 	uuid := params.FormValue(c.Ctx, "uuid")
+	versionId := params.FormValue(c.Ctx, "versionId")
 
 	fileChunk := services.FileMsService.Take("uuid", uuid)
 	if fileChunk == nil {
@@ -421,10 +404,20 @@ func (c *FileController) GetContent() *web.JsonResult {
 		return web.JsonErrorCode(http.StatusInternalServerError, "GetFileChunkByUUID failed.")
 	}
 
+	if fileChunk.DeletedAt != nil {
+		return web.JsonErrorCode(common.ServiceFS+common.ModuleMinio+common.ErrNotFound, "file has been deleted.")
+	}
+
 	bucketName := config.Instance.Minio.Bucket
 	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, uuid[0:1], uuid[1:2], uuid, fileChunk.FileName), "/")
 
-	object, err := FS.ClientMinio.Client1.GetObject(bucketName, objectName, minio.GetObjectOptions{})
+	var opts miniov7.GetObjectOptions
+	if "" != versionId {
+		opts = miniov7.GetObjectOptions{
+			VersionID: versionId,
+		}
+	}
+	object, err := FS.ClientMinio.Client1.GetObject(c.Ctx, bucketName, objectName, opts)
 	if err != nil {
 		logrus.Errorf("errCode: %d, errDescriotion: 下载文件失败 %v ", common.ServiceFS+common.ModuleMinio+common.ErrBusDownload, err)
 		return web.JsonErrorCode(common.ServiceFS+common.ModuleMinio+common.ErrBusDownload, "下载文件失败")
@@ -446,24 +439,35 @@ func (c *FileController) GetContent() *web.JsonResult {
 		})
 }
 
+// GetDownload return download url
 func (c *FileController) GetDownload() *web.JsonResult {
 	uuid := params.FormValue(c.Ctx, "uuid")
+	name := params.FormValue(c.Ctx, "name") // 期望下载后修改的文件名
 	fileChunk := services.FileMsService.Take("uuid", uuid)
 	if fileChunk == nil {
 		logrus.Errorf("GetFileChunkByUUID failed by uuid: %s", uuid)
 		return web.JsonErrorCode(http.StatusInternalServerError, "GetFileChunkByUUID failed.")
 	}
 
+	if fileChunk.DeletedAt != nil {
+		return web.JsonErrorCode(common.ServiceFS+common.ModuleMinio+common.ErrNotFound, "file has been deleted.")
+	}
+
 	bucketName := config.Instance.Minio.Bucket
 	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, uuid[0:1], uuid[1:2], uuid, fileChunk.FileName), "/")
 
-	url, err := FS.ClientMinio.Client1.PresignedGetObject(bucketName, objectName, time.Second*1000, url.Values{})
+	// Set request parameters for content-disposition.
+	reqParams := make(url.Values)
+	if "" != name {
+		//reqParams.Set("response-content-disposition", "attachment; filename=\"11111.txt\"")
+		reqParams.Set("response-content-disposition", fmt.Sprintf("attachment; filename=%s", name))
+	}
+
+	url, err := FS.ClientMinio.Client1.PresignedGetObject(c.Ctx, bucketName, objectName, time.Second*1000, reqParams)
 	if nil != err {
 		logrus.Errorf("PresignedGetObject failed by uuid: %s", uuid)
 		return web.JsonErrorCode(http.StatusInternalServerError, "PresignedGetObject failed.")
 	}
-
-	fmt.Println(url, url.Port())
 
 	return web.JsonData(
 		map[string]interface{}{
@@ -473,7 +477,7 @@ func (c *FileController) GetDownload() *web.JsonResult {
 		})
 }
 
-// Delete 删除文件
+// Delete 删除文件 可指定version
 func (c *FileController) Delete() *web.JsonResult {
 	// TODO 用户身份权限识别
 	uuid := c.Ctx.PostValue("uuid")
@@ -483,16 +487,12 @@ func (c *FileController) Delete() *web.JsonResult {
 		logrus.Errorf("GetFileChunkByUUID failed by uuid: %s", uuid)
 		return web.JsonErrorCode(http.StatusInternalServerError, "GetFileChunkByUUID failed.")
 	}
-	if nil != fileChunk.DeletedAt {
-		return web.JsonData(
-			map[string]interface{}{
-				"uuid":      uuid,
-				"delete_at": fileChunk.DeletedAt,
-				"file":      fileChunk.FileName,
-			})
+
+	if whitelist.CheckList(fileChunk.FileName) {
+		return web.JsonErrorCode(common.ServiceFS+common.ModuleMinio+common.ErrForbidden, "modification of the preset file is prohibited")
 	}
 
-	_, err := deleteObject(uuid, fileChunk.FileName)
+	_, err := deleteObject(c.Ctx, uuid, fileChunk.FileName)
 	if err != nil {
 		logrus.Errorf("errCode: %d, errDescriotion: 文件 %s 删除失败", common.ServiceFS+common.ModuleMinio+common.ErrBusDelete, uuid)
 		return web.JsonErrorCode(common.ServiceFS+common.ModuleMinio+common.ErrBusDelete, "删除文件失败")
@@ -503,6 +503,14 @@ func (c *FileController) Delete() *web.JsonResult {
 		logrus.Errorf("UpdateFileChunk failed: %s", err)
 		return web.JsonErrorCode(http.StatusInternalServerError, "UpdateFileChunk failed.")
 	}
+	versionArr := services.FileMsVersionService.Find(sqls.NewCnd().Eq("file_chunk_id", fileChunk.Id).Desc("id").Limit(1))
+	if len(versionArr) > 0 && versionArr[0].DeletedAt == nil {
+		err = services.FileMsVersionService.UpdateColumn(versionArr[0].Id, "deleted_at", deleteAt)
+		if err != nil {
+			logrus.Errorf("UpdateFileChunkVersion failed: %s", err)
+			return web.JsonErrorCode(http.StatusInternalServerError, "UpdateFileChunkVersion failed.")
+		}
+	}
 
 	return web.JsonData(
 		map[string]interface{}{
@@ -512,7 +520,28 @@ func (c *FileController) Delete() *web.JsonResult {
 		})
 }
 
-func isObjectExist(bucketName string, objectName string) (bool, error) {
+func (c *FileController) GetVersions() *web.JsonResult {
+	uuid := params.FormValue(c.Ctx, "uuid")
+	bucketName := config.Instance.Minio.Bucket
+	prefix := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, uuid[0:1], uuid[1:2], uuid), "/")
+
+	objectCh := FS.ClientMinio.Client1.ListObjects(c.Ctx, bucketName, miniov7.ListObjectsOptions{
+		Prefix:       prefix,
+		WithVersions: true,
+		Recursive:    true,
+	})
+
+	var ObjectArr []string
+	for object := range objectCh {
+		if object.Err == nil {
+			ObjectArr = append(ObjectArr, object.VersionID)
+		}
+	}
+
+	return web.JsonData(ObjectArr)
+}
+
+func isObjectExist(ctx context.Context, bucketName string, prefix string) (bool, error) {
 	isExist := false
 	doneCh := make(chan struct{})
 	defer close(doneCh)
@@ -523,7 +552,11 @@ func isObjectExist(bucketName string, objectName string) (bool, error) {
 		return isExist, err
 	}
 
-	objectCh := cl.Client1.ListObjects(bucketName, objectName, false, doneCh)
+	objectCh := cl.Client1.ListObjects(ctx, bucketName, miniov7.ListObjectsOptions{
+		Prefix:       prefix,
+		WithVersions: true,
+		Recursive:    true,
+	})
 	for object := range objectCh {
 		if object.Err != nil {
 			logrus.Errorf("ListObjects failed: %s", object.Err)
@@ -536,7 +569,7 @@ func isObjectExist(bucketName string, objectName string) (bool, error) {
 	return isExist, nil
 }
 
-func newMultiPartUpload(uuid, fileName string) (string, error) {
+func newMultiPartUpload(ctx iris.Context, uuid, fileName string) (string, error) {
 	cl, err := FS.ClientMinio.GetMinioClient(config.Instance)
 	if err != nil {
 		logrus.Errorf("GetMinioClient failed: %s", err)
@@ -546,7 +579,7 @@ func newMultiPartUpload(uuid, fileName string) (string, error) {
 	bucketName := config.Instance.Minio.Bucket
 	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, uuid[0:1], uuid[1:2], uuid, fileName), "/")
 
-	return cl.Client2.NewMultipartUpload(bucketName, objectName, minio.PutObjectOptions{})
+	return cl.Client2.NewMultipartUpload(ctx, bucketName, objectName, miniov7.PutObjectOptions{})
 }
 
 func genMultiPartSignedUrl(uuid string, uploadId string, fileName string, partNumber int, partSize int64) (string, error) {
@@ -564,11 +597,11 @@ func genMultiPartSignedUrl(uuid string, uploadId string, fileName string, partNu
 
 }
 
-func completeMultiPartUpload(uuid string, uploadID, fileName string) (string, error) {
+func completeMultiPartUpload(uuid string, uploadID, fileName string) (minio_ext.UploadInfo, error) {
 	cl, err := FS.ClientMinio.GetMinioClient(config.Instance)
 	if err != nil {
 		logrus.Errorf("GetMinioClient failed: %s", err)
-		return "", err
+		return minio_ext.UploadInfo{}, err
 	}
 
 	bucketName := config.Instance.Minio.Bucket
@@ -577,12 +610,12 @@ func completeMultiPartUpload(uuid string, uploadID, fileName string) (string, er
 	partInfos, err := cl.Client3.ListObjectParts(bucketName, objectName, uploadID)
 	if err != nil {
 		logrus.Errorf("ListObjectParts failed: %s", err)
-		return "", err
+		return minio_ext.UploadInfo{}, err
 	}
 
-	var complMultipartUpload completeMultipartUpload
+	var complMultipartUpload minio_ext.CompleteMultipartUpload
 	for _, partInfo := range partInfos {
-		complMultipartUpload.Parts = append(complMultipartUpload.Parts, minio.CompletePart{
+		complMultipartUpload.Parts = append(complMultipartUpload.Parts, minio_ext.CompletePart{
 			PartNumber: partInfo.PartNumber,
 			ETag:       partInfo.ETag,
 		})
@@ -591,10 +624,11 @@ func completeMultiPartUpload(uuid string, uploadID, fileName string) (string, er
 	// Sort all completed parts.
 	sort.Sort(completedParts(complMultipartUpload.Parts))
 
-	return cl.Client2.CompleteMultipartUpload(bucketName, objectName, uploadID, complMultipartUpload.Parts)
+	return cl.Client3.CompleteMultipartUpload(bucketName, objectName, uploadID, complMultipartUpload.Parts)
 }
 
-func deleteObject(uuid, fileName string) (string, error) {
+func deleteObject(ctx iris.Context, uuid, fileName string) (string, error) {
+	version := params.FormValue(ctx, "version")
 	cl, err := FS.ClientMinio.GetMinioClient(config.Instance)
 	if err != nil {
 		logrus.Errorf("GetMinioClient failed: %s", err)
@@ -604,7 +638,10 @@ func deleteObject(uuid, fileName string) (string, error) {
 	bucketName := config.Instance.Minio.Bucket
 	objectName := strings.TrimPrefix(path.Join(config.Instance.Minio.BasePath, uuid[0:1], uuid[1:2], uuid, fileName), "/")
 
-	err = cl.Client1.RemoveObject(bucketName, objectName)
+	err = cl.Client1.RemoveObject(ctx, bucketName, objectName, miniov7.RemoveObjectOptions{
+		VersionID:        version,
+		GovernanceBypass: true,
+	})
 	if err != nil {
 		logrus.Errorf("deleteObject failed: %s", err)
 		return "", err

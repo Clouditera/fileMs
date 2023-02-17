@@ -31,3 +31,10 @@ func init() {
 	}
 	return
 }
+
+func CheckList(file string) bool {
+	if Whitelist[file] {
+		return true
+	}
+	return false
+}

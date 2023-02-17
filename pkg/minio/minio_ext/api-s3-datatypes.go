@@ -18,6 +18,7 @@
 package minio_ext
 
 import (
+	"encoding/xml"
 	"time"
 )
 
@@ -68,4 +69,66 @@ type ListObjectPartsResult struct {
 	ObjectParts []ObjectPart `xml:"Part"`
 
 	EncodingType string
+}
+
+// completeMultipartUploadResult container for completed multipart
+// upload response.
+type completeMultipartUploadResult struct {
+	Location string
+	Bucket   string
+	Key      string
+	ETag     string
+
+	// Checksum values, hash of hashes of parts.
+	ChecksumCRC32  string
+	ChecksumCRC32C string
+	ChecksumSHA1   string
+	ChecksumSHA256 string
+}
+
+// CompletePart sub container lists individual part numbers and their
+// md5sum, part of completeMultipartUpload.
+type CompletePart struct {
+	XMLName xml.Name `xml:"http://s3.amazonaws.com/doc/2006-03-01/ Part" json:"-"`
+
+	// Part number identifies the part.
+	PartNumber int
+	ETag       string
+
+	// Checksum values
+	ChecksumCRC32  string `xml:"ChecksumCRC32,omitempty"`
+	ChecksumCRC32C string `xml:"ChecksumCRC32C,omitempty"`
+	ChecksumSHA1   string `xml:"ChecksumSHA1,omitempty"`
+	ChecksumSHA256 string `xml:"ChecksumSHA256,omitempty"`
+}
+
+// CompleteMultipartUpload container for completing multipart upload.
+type CompleteMultipartUpload struct {
+	XMLName xml.Name       `xml:"http://s3.amazonaws.com/doc/2006-03-01/ CompleteMultipartUpload" json:"-"`
+	Parts   []CompletePart `xml:"Part"`
+}
+
+// UploadInfo contains information about the
+// newly uploaded or copied object.
+type UploadInfo struct {
+	Bucket       string
+	Key          string
+	ETag         string
+	Size         int64
+	LastModified time.Time
+	Location     string
+	VersionID    string
+
+	// Lifecycle expiry-date and ruleID associated with the expiry
+	// not to be confused with `Expires` HTTP header.
+	Expiration       time.Time
+	ExpirationRuleID string
+
+	// Verified checksum values, if any.
+	// Values are base64 (standard) encoded.
+	// For multipart objects this is a checksum of the checksum of each part.
+	ChecksumCRC32  string
+	ChecksumCRC32C string
+	ChecksumSHA1   string
+	ChecksumSHA256 string
 }

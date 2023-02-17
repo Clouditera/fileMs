@@ -3,7 +3,7 @@ package model
 import "time"
 
 var Models = []interface{}{
-	&FileChunk{},
+	&FileChunk{}, &FileVersion{},
 }
 
 const (
@@ -19,9 +19,7 @@ type Model struct {
 }
 
 type FileChunk struct {
-	//ID			  int64  `gorm:"PRIMARY_KEY;AUTO_INCREMENT"`
 	Model
-
 	UUID           string `gorm:"UNIQUE"`
 	Md5            string // `gorm:"UNIQUE"`
 	IsUploaded     int    `gorm:"DEFAULT 0"` // not uploaded: 0, uploaded: 1
@@ -31,4 +29,10 @@ type FileChunk struct {
 	FileName       string
 	CompletedParts string `gorm:"type:text"` // chunkNumber+etag eg: ,1-asqwewqe21312312.2-123hjkas
 	//ReadOnly       int    `gorm:"DEFAULT 1"` // read only: 1, read and write: 0
+}
+
+type FileVersion struct {
+	Model
+	FileChunkId int64
+	VersionId   string
 }

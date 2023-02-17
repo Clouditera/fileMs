@@ -22,6 +22,10 @@ const _ = grpc.SupportPackageIsVersion7
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type FileMsServiceClient interface {
+	// Create file by content
+	CreateFile(ctx context.Context, in *CreateFileRequest, opts ...grpc.CallOption) (*FileRequest, error)
+	// update file content
+	UpdateFileContent(ctx context.Context, in *UpdateFileRequest, opts ...grpc.CallOption) (*FileRequest, error)
 	// get file, return url
 	GetFile(ctx context.Context, in *FileRequest, opts ...grpc.CallOption) (*FileResponse, error)
 	// get file content
@@ -38,6 +42,24 @@ type fileMsServiceClient struct {
 
 func NewFileMsServiceClient(cc grpc.ClientConnInterface) FileMsServiceClient {
 	return &fileMsServiceClient{cc}
+}
+
+func (c *fileMsServiceClient) CreateFile(ctx context.Context, in *CreateFileRequest, opts ...grpc.CallOption) (*FileRequest, error) {
+	out := new(FileRequest)
+	err := c.cc.Invoke(ctx, "/proto.FileMsService/CreateFile", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fileMsServiceClient) UpdateFileContent(ctx context.Context, in *UpdateFileRequest, opts ...grpc.CallOption) (*FileRequest, error) {
+	out := new(FileRequest)
+	err := c.cc.Invoke(ctx, "/proto.FileMsService/UpdateFileContent", in, out, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *fileMsServiceClient) GetFile(ctx context.Context, in *FileRequest, opts ...grpc.CallOption) (*FileResponse, error) {
@@ -80,6 +102,10 @@ func (c *fileMsServiceClient) ListFileVersions(ctx context.Context, in *FileRequ
 // All implementations should embed UnimplementedFileMsServiceServer
 // for forward compatibility
 type FileMsServiceServer interface {
+	// Create file by content
+	CreateFile(context.Context, *CreateFileRequest) (*FileRequest, error)
+	// update file content
+	UpdateFileContent(context.Context, *UpdateFileRequest) (*FileRequest, error)
 	// get file, return url
 	GetFile(context.Context, *FileRequest) (*FileResponse, error)
 	// get file content
@@ -94,6 +120,12 @@ type FileMsServiceServer interface {
 type UnimplementedFileMsServiceServer struct {
 }
 
+func (UnimplementedFileMsServiceServer) CreateFile(context.Context, *CreateFileRequest) (*FileRequest, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method CreateFile not implemented")
+}
+func (UnimplementedFileMsServiceServer) UpdateFileContent(context.Context, *UpdateFileRequest) (*FileRequest, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateFileContent not implemented")
+}
 func (UnimplementedFileMsServiceServer) GetFile(context.Context, *FileRequest) (*FileResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetFile not implemented")
 }
@@ -116,6 +148,42 @@ type UnsafeFileMsServiceServer interface {
 
 func RegisterFileMsServiceServer(s grpc.ServiceRegistrar, srv FileMsServiceServer) {
 	s.RegisterService(&FileMsService_ServiceDesc, srv)
+}
+
+func _FileMsService_CreateFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FileMsServiceServer).CreateFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/proto.FileMsService/CreateFile",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FileMsServiceServer).CreateFile(ctx, req.(*CreateFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FileMsService_UpdateFileContent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FileMsServiceServer).UpdateFileContent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: "/proto.FileMsService/UpdateFileContent",
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FileMsServiceServer).UpdateFileContent(ctx, req.(*UpdateFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _FileMsService_GetFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -197,6 +265,14 @@ var FileMsService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "proto.FileMsService",
 	HandlerType: (*FileMsServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "CreateFile",
+			Handler:    _FileMsService_CreateFile_Handler,
+		},
+		{
+			MethodName: "UpdateFileContent",
+			Handler:    _FileMsService_UpdateFileContent_Handler,
+		},
 		{
 			MethodName: "GetFile",
 			Handler:    _FileMsService_GetFile_Handler,

@@ -6,6 +6,10 @@ package proto; // 设置包名
 
 // fileMs service define.
 service FileMsService {
+  // Create file by content
+  rpc CreateFile(CreateFileRequest) returns (FileRequest) {}
+  // update file content
+  rpc UpdateFileContent(UpdateFileRequest) returns (FileRequest) {}
   // get file, return url
   rpc GetFile(FileRequest) returns (FileResponse) {}
   // get file content
@@ -17,8 +21,20 @@ service FileMsService {
 }
 
 
+message CreateFileRequest {
+  string filename = 1;
+  string content = 2;
+}
+
+message UpdateFileRequest {
+  string uuid = 1;
+  string content = 2;
+}
+
+
 message FileRequest {
   string uuid = 1;
+  string version = 2;
 }
 
 message FileResponse {
